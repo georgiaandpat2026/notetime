@@ -306,7 +306,12 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+const SUPABASE_URL = 'https://tdvcpolauaddnuvixaaq.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRkdmNwb2xhdWFkZG51dml4YWFxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM4MzAwNTUsImV4cCI6MjA4OTQwNjA1NX0.SAR99wod-y8-zwTRYFC_LLBDEDkyAYSgRuJHGbGtmPI';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
 const CATS = [
   { id:'discussion',  label:'Client discussion', icon:'💬' },
   { id:'report',      label:'Report writing',    icon:'📝' },
@@ -319,17 +324,50 @@ const CATS = [
 ];
 
 let user    = null;
-let clients = JSON.parse(localStorage.getItem('nt_clients') || '[]');
-let entries = JSON.parse(localStorage.getItem('nt_entries') || '[]');
+let clients = [];
+let entries = [];
 let histFilter   = 'week';
 let clientFilter = 'active';
 let editClientId = null;
 let logCat       = null;
 let timerInt = null, timerSec = 0, timerOn = false;
 
-function save() {
-  localStorage.setItem('nt_clients', JSON.stringify(clients));
-  localStorage.setItem('nt_entries', JSON.stringify(entries));
+// ── DB ──
+async function loadData() {
+  showLoading(true);
+  const [{ data: c }, { data: e }] = await Promise.all([
+    sb.from('clients').select('*'),
+    sb.from('entries').select('*')
+  ]);
+  clients = (c||[]).map(mapClient);
+  entries = (e||[]).map(mapEntry);
+  showLoading(false);
+}
+
+// Map DB row (snake_case) → app object (camelCase)
+function mapClient(r) {
+  return { id:r.id, name:r.name, ref:r.ref||null, notes:r.notes||null, archived:r.archived||false };
+}
+function mapEntry(r) {
+  return { id:r.id, userId:r.user_id, userName:r.user_name, cat:r.cat,
+    clientId:r.client_id||null, mins:r.mins, notes:r.notes||null,
+    date:r.date, ts:r.ts, billed:r.billed||false };
+}
+
+function showLoading(on) {
+  let el=document.getElementById('loading-overlay');
+  if(!el) {
+    el=document.createElement('div');
+    el.id='loading-overlay';
+    el.style.cssText='position:fixed;inset:0;background:rgba(245,242,238,.85);z-index:999;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:13px;color:var(--muted)';
+    el.textContent='Loading…';
+    document.body.appendChild(el);
+  }
+  el.style.display=on?'flex':'none';
+}
+
+async function save() {
+  // no-op: all writes go directly to Supabase inline
 }
 
 // ── UTILS ──
@@ -358,15 +396,16 @@ document.querySelectorAll('.overlay').forEach(o=>{
 });
 
 // ── USER ──
-function selectUser(id,name) {
+async function selectUser(id,name) {
   user={id,name};
   document.getElementById('picker').style.display='none';
   document.getElementById('app').classList.add('on');
   document.getElementById('topbar-name').textContent=name;
+  await loadData();
   refreshDash(); renderHistFilters(); renderClientFilters();
 }
 function switchUser() {
-  user=null; clearTimer();
+  user=null; clearTimer(); clients=[]; entries=[];
   document.getElementById('app').classList.remove('on');
   document.getElementById('picker').style.display='flex';
 }
@@ -474,7 +513,7 @@ function selCat(id) {
   CATS.forEach(c=>{ const b=document.getElementById('cb-'+c.id); if(b) b.classList.toggle('sel',c.id===id); });
 }
 
-function submitLog() {
+async function submitLog() {
   const err=document.getElementById('l-err'); err.style.display='none';
   if(!logCat)           { err.textContent='Please select a category'; err.style.display='block'; return; }
   // If timer is still running, stop it and fill in the fields
@@ -490,11 +529,18 @@ function submitLog() {
   if(h*60+m<=0)         { err.textContent='Please enter a duration';  err.style.display='block'; return; }
   const date=document.getElementById('l-date').value;
   if(!date)             { err.textContent='Please select a date';     err.style.display='block'; return; }
-  entries.push({ id:uid(), userId:user.id, userName:user.name, cat:logCat,
+  const newEntry = { id:uid(), userId:user.id, userName:user.name, cat:logCat,
     clientId:document.getElementById('l-client').value||null,
     mins:h*60+m, notes:document.getElementById('l-notes').value.trim()||null,
-    date, ts:Date.now(), billed:false });
-  save(); clearTimer(); closeOverlay('log-overlay'); toast('Time logged ✓');
+    date, ts:Date.now(), billed:false };
+  const { error } = await sb.from('entries').insert({
+    id:newEntry.id, user_id:newEntry.userId, user_name:newEntry.userName,
+    cat:newEntry.cat, client_id:newEntry.clientId, mins:newEntry.mins,
+    notes:newEntry.notes, date:newEntry.date, ts:newEntry.ts, billed:false
+  });
+  if(error) { err.textContent='Error saving. Please try again.'; err.style.display='block'; return; }
+  entries.push(newEntry);
+  clearTimer(); closeOverlay('log-overlay'); toast('Time logged ✓');
   refreshDash();
   if(document.getElementById('screen-history').classList.contains('active')) loadHistory();
   if(document.getElementById('screen-clients').classList.contains('active')) renderClients();
@@ -668,10 +714,10 @@ function detailEntryHTML(e) {
 
 function setDetailFilter(f) { detailBillFilter=f; renderDetailSheet(); }
 
-function toggleBilled(entryId) {
+async function toggleBilled(entryId) {
   const e=entries.find(x=>x.id===entryId); if(!e) return;
   e.billed=!e.billed;
-  save();
+  await sb.from('entries').update({billed:e.billed}).eq('id',entryId);
   renderDetailSheet();
   renderClients();
   if(document.getElementById('screen-history').classList.contains('active')) loadHistory();
@@ -691,7 +737,7 @@ function openClientSheet(id=null) {
   openOverlay('client-overlay');
 }
 
-function saveClient() {
+async function saveClient() {
   const name=document.getElementById('c-name').value.trim();
   const ref =document.getElementById('c-ref').value.trim();
   const notes=document.getElementById('c-notes').value.trim();
@@ -700,16 +746,20 @@ function saveClient() {
   if(editClientId) {
     const c=clients.find(x=>x.id===editClientId);
     if(c) { c.name=name; c.ref=ref||null; c.notes=notes||null; }
+    await sb.from('clients').update({name,ref:ref||null,notes:notes||null}).eq('id',editClientId);
   } else {
-    clients.push({id:uid(),name,ref:ref||null,notes:notes||null,archived:false});
+    const newClient={id:uid(),name,ref:ref||null,notes:notes||null,archived:false};
+    await sb.from('clients').insert({id:newClient.id,name,ref:ref||null,notes:notes||null,archived:false});
+    clients.push(newClient);
   }
-  save(); closeOverlay('client-overlay'); renderClients();
+  closeOverlay('client-overlay'); renderClients();
   toast(editClientId?'Client updated ✓':'Client added ✓');
 }
 
-function toggleArchive(id,archive) {
+async function toggleArchive(id,archive) {
   const c=clients.find(x=>x.id===id); if(c) c.archived=archive;
-  save(); renderClients(); toast(archive?'Client archived':'Client restored');
+  await sb.from('clients').update({archived:archive}).eq('id',id);
+  renderClients(); toast(archive?'Client archived':'Client restored');
 }
 
 // ── EDIT ENTRY ──
@@ -742,24 +792,34 @@ function openEdit(id) {
   openOverlay('edit-overlay');
 }
 
-function updateEntry(id) {
+async function updateEntry(id) {
   const err=document.getElementById('e-err');
   const h=parseInt(document.getElementById('e-h').value)||0;
   const m=parseInt(document.getElementById('e-m').value)||0;
   if(h*60+m<=0) { err.textContent='Please enter a duration'; err.style.display='block'; return; }
   const e=entries.find(x=>x.id===id);
-  if(e) { e.cat=document.getElementById('e-cat').value; e.clientId=document.getElementById('e-client').value||null; e.mins=h*60+m; e.date=document.getElementById('e-date').value; e.notes=document.getElementById('e-notes').value.trim()||null; }
-  save(); closeOverlay('edit-overlay'); toast('Entry updated ✓');
+  if(e) {
+    e.cat=document.getElementById('e-cat').value;
+    e.clientId=document.getElementById('e-client').value||null;
+    e.mins=h*60+m;
+    e.date=document.getElementById('e-date').value;
+    e.notes=document.getElementById('e-notes').value.trim()||null;
+    await sb.from('entries').update({
+      cat:e.cat, client_id:e.clientId, mins:e.mins, date:e.date, notes:e.notes
+    }).eq('id',id);
+  }
+  closeOverlay('edit-overlay'); toast('Entry updated ✓');
   refreshDash();
   if(document.getElementById('screen-history').classList.contains('active')) loadHistory();
   if(document.getElementById('screen-clients').classList.contains('active')) renderClients();
   if(detailClientId) renderDetailSheet();
 }
 
-function deleteEntry(id) {
+async function deleteEntry(id) {
   if(!confirm('Delete this entry?')) return;
   entries=entries.filter(e=>e.id!==id);
-  save(); closeOverlay('edit-overlay'); toast('Entry deleted');
+  await sb.from('entries').delete().eq('id',id);
+  closeOverlay('edit-overlay'); toast('Entry deleted');
   refreshDash(); loadHistory(); renderClients();
 }
 </script>

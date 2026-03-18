@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -337,7 +338,7 @@ async function loadData() {
   showLoading(true);
   const [{ data: c }, { data: e }] = await Promise.all([
     sb.from('clients').select('*'),
-    sb.from('entries').select('*')
+    sb.from('entires').select('*')
   ]);
   clients = (c||[]).map(mapClient);
   entries = (e||[]).map(mapEntry);
@@ -533,7 +534,7 @@ async function submitLog() {
     clientId:document.getElementById('l-client').value||null,
     mins:h*60+m, notes:document.getElementById('l-notes').value.trim()||null,
     date, ts:Date.now(), billed:false };
-  const { error } = await sb.from('entries').insert({
+  const { error } = await sb.from('entires').insert({
     id:newEntry.id, user_id:newEntry.userId, user_name:newEntry.userName,
     cat:newEntry.cat, client_id:newEntry.clientId, mins:newEntry.mins,
     notes:newEntry.notes, date:newEntry.date, ts:newEntry.ts, billed:false
@@ -717,7 +718,7 @@ function setDetailFilter(f) { detailBillFilter=f; renderDetailSheet(); }
 async function toggleBilled(entryId) {
   const e=entries.find(x=>x.id===entryId); if(!e) return;
   e.billed=!e.billed;
-  await sb.from('entries').update({billed:e.billed}).eq('id',entryId);
+  await sb.from('entires').update({billed:e.billed}).eq('id',entryId);
   renderDetailSheet();
   renderClients();
   if(document.getElementById('screen-history').classList.contains('active')) loadHistory();
@@ -804,7 +805,7 @@ async function updateEntry(id) {
     e.mins=h*60+m;
     e.date=document.getElementById('e-date').value;
     e.notes=document.getElementById('e-notes').value.trim()||null;
-    await sb.from('entries').update({
+    await sb.from('entires').update({
       cat:e.cat, client_id:e.clientId, mins:e.mins, date:e.date, notes:e.notes
     }).eq('id',id);
   }
@@ -818,7 +819,7 @@ async function updateEntry(id) {
 async function deleteEntry(id) {
   if(!confirm('Delete this entry?')) return;
   entries=entries.filter(e=>e.id!==id);
-  await sb.from('entries').delete().eq('id',id);
+  await sb.from('entires').delete().eq('id',id);
   closeOverlay('edit-overlay'); toast('Entry deleted');
   refreshDash(); loadHistory(); renderClients();
 }
